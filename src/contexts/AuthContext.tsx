@@ -168,7 +168,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (error) {
         console.error('Sign in error:', error);
-        throw error;
+        
+        // Handle specific error messages
+        if (error.message.includes('Invalid login credentials')) {
+          throw new Error('Email atau kata laluan tidak sah');
+        } else if (error.message.includes('Email not confirmed')) {
+          throw new Error('Sila sahkan email anda terlebih dahulu');
+        } else if (error.message.includes('Too many requests')) {
+          throw new Error('Terlalu banyak percubaan. Sila cuba lagi kemudian');
+        } else {
+          throw new Error(error.message || 'Ralat semasa log masuk');
+        }
       }
 
       console.log('Sign in successful:', data.user?.id);
@@ -189,7 +199,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (error) {
         console.error('Sign up error:', error);
-        throw error;
+        
+        // Handle specific error messages
+        if (error.message.includes('User already registered')) {
+          throw new Error('Email ini telah didaftarkan. Sila log masuk.');
+        } else if (error.message.includes('Password should be at least')) {
+          throw new Error('Kata laluan mestilah sekurang-kurangnya 6 aksara');
+        } else if (error.message.includes('Invalid email')) {
+          throw new Error('Format email tidak sah');
+        } else {
+          throw new Error(error.message || 'Ralat semasa mendaftar');
+        }
       }
 
       console.log('Sign up successful:', data.user?.id);

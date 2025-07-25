@@ -11,14 +11,16 @@ import {
   Search,
   FileText,
   Image as ImageIcon,
-  Upload
+  Upload,
+  AlertCircle,
+  CheckCircle
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 interface Template {
   id: string;
   title: string;
-  category: 'Produk' | 'Harian' | 'Umum';
+  category: 'Product' | 'Daily' | 'General';
   type: 'image' | 'pdf';
   file_url: string | null;
   uploaded_by: string | null;
@@ -38,10 +40,11 @@ export default function Templates() {
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const [formData, setFormData] = useState({
     title: '',
-    category: 'Produk' as const,
+    category: 'Product' as const,
     type: 'image' as const,
     file: null as File | null
   });
@@ -74,33 +77,97 @@ export default function Templates() {
 
   const uploadFile = async (file: File): Promise<string> => {
     const fileExt = file.name.split('.').pop();
-    const fileName = `${Math.random()}.${fileExt}`;
+    const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
     const filePath = `templates/${fileName}`;
 
-    const { error: uploadError } = await supabase.storage
-      .from('templates')
-      .upload(filePath, file);
+    setUploadProgress(0);
 
-    if (uploadError) {
-      throw uploadError;
+    try {
+      // Check if bucket exists, if not create it
+      const { data: buckets } = await supabase.storage.listBuckets();
+      const templateBucket = buckets?.find(bucket => bucket.name === 'templates');
+      
+      if (!templateBucket) {
+        const { error: bucketError } = await supabase.storage.createBucket('templates', {
+          public: true,
+          allowedMimeTypes: ['image/*', 'application/pdf'],
+          fileSizeLimit: 10485760 // 10MB
+        });
+        
+        if (bucketError) {
+          console.error('Error creating bucket:', bucketError);
+          throw new Error('Ralat mencipta bucket storage');
+        }
+      }
+
+      setUploadProgress(25);
+
+      const { error: uploadError } = await supabase.storage
+        .from('templates')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false
+        });
+
+      if (uploadError) {
+        console.error('Upload error:', uploadError);
+        throw new Error('Ralat memuat naik fail: ' + uploadError.message);
+      }
+
+      setUploadProgress(75);
+
+      const { data } = supabase.storage
+        .from('templates')
+        .getPublicUrl(filePath);
+
+      setUploadProgress(100);
+
+      if (!data.publicUrl) {
+        throw new Error('Ralat mendapatkan URL fail');
+      }
+
+      return data.publicUrl;
+    } catch (error) {
+      console.error('Upload error:', error);
+      throw error;
     }
-
-    const { data } = supabase.storage
-      .from('templates')
-      .getPublicUrl(filePath);
-
-    return data.publicUrl;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
 
+    if (!formData.title.trim()) {
+      toast.error('Tajuk template tidak boleh kosong');
+      return;
+    }
+
+    if (!editingTemplate && !formData.file) {
+      toast.error('Sila pilih fail untuk dimuat naik');
+      return;
+    }
+
     try {
       setUploading(true);
       let fileUrl = editingTemplate?.file_url || null;
 
       if (formData.file) {
+        // Validate file type
+        const allowedTypes = formData.type === 'image' 
+          ? ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']
+          : ['application/pdf'];
+        
+        if (!allowedTypes.includes(formData.file.type)) {
+          toast.error(`Jenis fail tidak disokong. Sila pilih fail ${formData.type === 'image' ? 'imej' : 'PDF'}`);
+          return;
+        }
+
+        // Validate file size (10MB max)
+        if (formData.file.size > 10 * 1024 * 1024) {
+          toast.error('Saiz fail terlalu besar. Maksimum 10MB');
+          return;
+        }
+
         fileUrl = await uploadFile(formData.file);
       }
 
@@ -108,7 +175,7 @@ export default function Templates() {
         const { error } = await supabase
           .from('templates')
           .update({
-            title: formData.title,
+            title: formData.title.trim(),
             category: formData.category,
             type: formData.type,
             file_url: fileUrl,
@@ -122,11 +189,12 @@ export default function Templates() {
         const { error } = await supabase
           .from('templates')
           .insert([{
-            title: formData.title,
+            title: formData.title.trim(),
             category: formData.category,
             type: formData.type,
             file_url: fileUrl,
-            uploaded_by: user.id
+            uploaded_by: user.id,
+            uploaded_at: new Date().toISOString().split('T')[0]
           }]);
 
         if (error) throw error;
@@ -135,13 +203,15 @@ export default function Templates() {
 
       setShowModal(false);
       setEditingTemplate(null);
-      setFormData({ title: '', category: 'Produk', type: 'image', file: null });
+      setFormData({ title: '', category: 'Product', type: 'image', file: null });
+      setUploadProgress(0);
       fetchTemplates();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving template:', error);
-      toast.error('Ralat semasa menyimpan template');
+      toast.error(error.message || 'Ralat semasa menyimpan template');
     } finally {
       setUploading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -179,12 +249,16 @@ export default function Templates() {
 
     try {
       const response = await fetch(template.file_url);
+      if (!response.ok) throw new Error('Ralat memuat turun fail');
+      
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = `${template.title}.${template.type === 'image' ? 'jpg' : 'pdf'}`;
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
       toast.success('Template berjaya dimuat turun');
     } catch (error) {
@@ -202,9 +276,9 @@ export default function Templates() {
 
   const getCategoryColor = (category: string) => {
     switch (category) {
-      case 'Produk': return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300';
-      case 'Harian': return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300';
-      case 'Umum': return 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300';
+      case 'Product': return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300';
+      case 'Daily': return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300';
+      case 'General': return 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300';
       default: return 'bg-gray-100 text-gray-800';
     }
   };
@@ -229,6 +303,11 @@ export default function Templates() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center">
             <Images className="h-7 w-7 mr-2 text-pink-500" />
             Template Design
+            {profile?.role === 'admin' && (
+              <span className="ml-2 text-sm bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full">
+                Admin View
+              </span>
+            )}
           </h1>
           <p className="text-gray-600 dark:text-gray-400 mt-1">
             Koleksi template design untuk keperluan content anda
@@ -263,9 +342,9 @@ export default function Templates() {
             className="input-field pl-10 pr-8"
           >
             <option value="all">Semua Kategori</option>
-            <option value="Produk">Produk</option>
-            <option value="Harian">Harian</option>
-            <option value="Umum">Umum</option>
+            <option value="Product">Produk</option>
+            <option value="Daily">Harian</option>
+            <option value="General">Umum</option>
           </select>
         </div>
         <div className="relative">
@@ -292,7 +371,9 @@ export default function Templates() {
                 </h3>
                 <div className="flex items-center space-x-2 mb-2">
                   <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getCategoryColor(template.category)}`}>
-                    {template.category}
+                    {template.category === 'Product' && 'Produk'}
+                    {template.category === 'Daily' && 'Harian'}
+                    {template.category === 'General' && 'Umum'}
                   </span>
                   <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300">
                     {template.type === 'image' ? 'Imej' : 'PDF'}
@@ -332,17 +413,45 @@ export default function Templates() {
 
             {/* Preview */}
             <div className="mb-4 bg-gray-100 dark:bg-gray-700 rounded-lg p-8 flex items-center justify-center h-32">
-              {template.type === 'image' ? (
-                <ImageIcon className="h-12 w-12 text-gray-400" />
+              {template.file_url ? (
+                template.type === 'image' ? (
+                  <img 
+                    src={template.file_url} 
+                    alt={template.title}
+                    className="max-h-full max-w-full object-contain rounded"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none';
+                      (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                    }}
+                  />
+                ) : (
+                  <FileText className="h-12 w-12 text-red-500" />
+                )
               ) : (
-                <FileText className="h-12 w-12 text-gray-400" />
+                template.type === 'image' ? (
+                  <ImageIcon className="h-12 w-12 text-gray-400" />
+                ) : (
+                  <FileText className="h-12 w-12 text-gray-400" />
+                )
               )}
+              <div className="hidden">
+                {template.type === 'image' ? (
+                  <ImageIcon className="h-12 w-12 text-gray-400" />
+                ) : (
+                  <FileText className="h-12 w-12 text-gray-400" />
+                )}
+              </div>
             </div>
 
             <div className="text-sm text-gray-600 dark:text-gray-400">
               <p>Dimuat naik oleh: {template.user_profiles?.nama || 'Tidak diketahui'}</p>
               {template.uploaded_at && (
                 <p>Tarikh: {new Date(template.uploaded_at).toLocaleDateString('ms-MY')}</p>
+              )}
+              {profile?.role === 'admin' && template.uploaded_by !== user?.id && (
+                <div className="text-xs text-blue-600 dark:text-blue-400 mt-2">
+                  Template pengguna lain
+                </div>
               )}
             </div>
           </div>
@@ -396,9 +505,9 @@ export default function Templates() {
                   onChange={(e) => setFormData({ ...formData, category: e.target.value as any })}
                   className="input-field"
                 >
-                  <option value="Produk">Produk</option>
-                  <option value="Harian">Harian</option>
-                  <option value="Umum">Umum</option>
+                  <option value="Product">Produk</option>
+                  <option value="Daily">Harian</option>
+                  <option value="General">Umum</option>
                 </select>
               </div>
 
@@ -430,7 +539,28 @@ export default function Templates() {
                   />
                   <Upload className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                 </div>
+                {formData.file && (
+                  <div className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+                    <CheckCircle className="inline h-4 w-4 mr-1 text-green-500" />
+                    {formData.file.name} ({(formData.file.size / 1024 / 1024).toFixed(2)} MB)
+                  </div>
+                )}
               </div>
+
+              {uploading && uploadProgress > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-600 dark:text-gray-400">Memuat naik...</span>
+                    <span className="text-gray-600 dark:text-gray-400">{uploadProgress}%</span>
+                  </div>
+                  <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                    <div 
+                      className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${uploadProgress}%` }}
+                    ></div>
+                  </div>
+                </div>
+              )}
 
               <div className="flex space-x-3 pt-4">
                 <button
@@ -438,7 +568,8 @@ export default function Templates() {
                   onClick={() => {
                     setShowModal(false);
                     setEditingTemplate(null);
-                    setFormData({ title: '', category: 'Produk', type: 'image', file: null });
+                    setFormData({ title: '', category: 'Product', type: 'image', file: null });
+                    setUploadProgress(0);
                   }}
                   className="btn-secondary flex-1"
                   disabled={uploading}

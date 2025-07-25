@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { Mail, Lock, LogIn, UserPlus, Eye, EyeOff } from 'lucide-react';
+import { Mail, Lock, LogIn, UserPlus, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function LoginForm() {
@@ -10,23 +10,25 @@ export default function LoginForm() {
   const [loading, setLoading] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
   const { signIn, signUp } = useAuth();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
     
     if (!email.trim() || !password.trim()) {
-      toast.error('Sila masukkan email dan kata laluan');
+      setError('Sila masukkan email dan kata laluan');
       return;
     }
 
     if (isSignUp && !nama.trim()) {
-      toast.error('Sila masukkan nama anda');
+      setError('Sila masukkan nama anda');
       return;
     }
 
     if (password.length < 6) {
-      toast.error('Kata laluan mestilah sekurang-kurangnya 6 aksara');
+      setError('Kata laluan mestilah sekurang-kurangnya 6 aksara');
       return;
     }
 
@@ -42,18 +44,10 @@ export default function LoginForm() {
       }
     } catch (error: any) {
       console.error('Auth error:', error);
+      setError(error.message || 'Ralat semasa ' + (isSignUp ? 'mendaftar' : 'masuk'));
       
-      if (error.message.includes('Invalid login credentials')) {
-        toast.error('Email atau kata laluan tidak sah');
-      } else if (error.message.includes('Email not confirmed')) {
-        toast.error('Sila sahkan email anda terlebih dahulu');
-      } else if (error.message.includes('Password should be at least 6 characters')) {
-        toast.error('Kata laluan mestilah sekurang-kurangnya 6 aksara');
-      } else if (error.message.includes('User already registered')) {
-        toast.error('Email ini telah didaftarkan. Sila log masuk.');
+      if (error.message?.includes('User already registered')) {
         setIsSignUp(false);
-      } else {
-        toast.error(error.message || 'Ralat semasa ' + (isSignUp ? 'mendaftar' : 'masuk'));
       }
     } finally {
       setLoading(false);
@@ -65,6 +59,7 @@ export default function LoginForm() {
     setPassword('');
     setNama('');
     setShowPassword(false);
+    setError('');
   };
 
   return (
@@ -81,6 +76,15 @@ export default function LoginForm() {
             Saffa Team Scheduler - Sistem Pengurusan Pasukan
           </p>
         </div>
+
+        {error && (
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+            <div className="flex items-center">
+              <AlertCircle className="h-5 w-5 text-red-400 mr-2" />
+              <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
+            </div>
+          </div>
+        )}
 
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
           <div className="space-y-4">
